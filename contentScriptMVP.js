@@ -2,55 +2,53 @@
 (function () {
     console.log('[EthosExt][cs] contentScript loaded');
 
-    // Map to track which <article> we've handled and store its score
-    const processedMap = new WeakMap();
+    // Keep track of which <article> we've already handled
+    const processedArticles = new WeakSet();
 
-    // Small delay helper to avoid API bursts
+    // Small delay to avoid spamming the API
     const sleep = ms => new Promise(res => setTimeout(res, ms));
 
     async function processReplies() {
         // 1) Grab all tweet articles (first is original, rest are replies)
         const articles = Array.from(document.querySelectorAll('article[role="article"]'));
         if (articles.length < 2) return;
+
         const replies = articles.slice(1);
-
-        // 2) For any new reply, fetch its score and inject a badge
         for (const article of replies) {
-            if (processedMap.has(article)) continue;
+            // 2) Skip if already processed
+            if (processedArticles.has(article)) continue;
 
-            // Find the @username span
+            // 3) Find the @username span in this reply
             let handleSpan = article.querySelector(
                 'div[data-testid="User-Name"] span:nth-child(2)'
             );
             if (!handleSpan) {
-                handleSpan = Array.from(article.querySelectorAll('span')).find(s =>
-                    /^@[A-Za-z0-9_]+$/.test(s.textContent.trim())
-                );
+                const spans = Array.from(article.querySelectorAll('span'));
+                handleSpan = spans.find(s => /^@[A-Za-z0-9_]+$/.test(s.textContent.trim()));
             }
             if (!handleSpan) {
-                console.warn('[EthosExt][cs] could not find handle span; skipping');
-                processedMap.set(article, 0);
+                console.warn('[EthosExt][cs] no handle found for a reply; skipping');
+                processedArticles.add(article);
                 continue;
             }
 
             const username = handleSpan.textContent.trim().slice(1);
             console.log('[EthosExt][cs] fetching Ethos score for', username);
 
-            // Ask background.js for the score
+            // 4) Ask background.js for the score
             const response = await new Promise(res =>
                 chrome.runtime.sendMessage({ action: 'fetchEthos', username }, res)
             );
             console.log('[EthosExt][cs] response for', username, response);
 
-            const score = (response?.success && typeof response.data.score === 'number')
-                ? response.data.score
-                : 0;
+            const score =
+                response?.success && typeof response.data.score === 'number'
+                    ? response.data.score
+                    : 0;
 
-            // Inject a single badge
-            const nextEl = handleSpan.nextElementSibling;
-            let badge;
-            if (nextEl && nextEl.classList.contains('ethos-badge')) {
-                badge = nextEl;
+            // 5) Inject or update a single badge right after handleSpan
+            let badge = handleSpan.nextElementSibling;
+            if (badge && badge.classList.contains('ethos-badge')) {
                 badge.textContent = ` [${score}]`;
             } else {
                 badge = document.createElement('span');
@@ -66,30 +64,16 @@
                 }
             }
 
-            // Store the score
-            processedMap.set(article, score);
-
-            // throttle before next
+            // 6) Mark this article done and pause before next
+            processedArticles.add(article);
             await sleep(100);
         }
-
-        // 3) Build an array of all replies with their stored scores
-        const scored = replies.map(article => ({
-            article,
-            score: processedMap.get(article) || 0
-        }));
-
-        console.log('[EthosExt][cs] scored array before sort:', scored);
-
-        // 4) Sort the array by descending score
-        const sorted = scored.slice().sort((a, b) => b.score - a.score);
-        console.log('[EthosExt][cs] scored array after sort:', sorted);
     }
 
-    // Observe for new replies loading (infinite scroll, nav)
+    // Watch for new replies (infinite scroll, etc.)
     const observer = new MutationObserver(processReplies);
     observer.observe(document.body, { childList: true, subtree: true });
 
-    // Initial pass
+    // Run immediately on load
     processReplies();
 })();
