@@ -1,4 +1,6 @@
-// contentScript.js
+// contentScriptMVP.js
+// this script injects the ethos badge on the replies
+
 (function () {
     console.log('[EthosExt][cs] contentScript loaded');
 

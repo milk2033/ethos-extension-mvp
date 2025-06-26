@@ -2,94 +2,127 @@
 (function () {
     console.log('[EthosExt][cs] contentScript loaded');
 
-    // Map to track which <article> we've handled and store its score
-    const processedMap = new WeakMap();
+    // Track processed tweets and spans, plus profile injection
+    const processedArticles = new WeakSet();
+    const processedSpans = new WeakSet();
+    let profileInjected = false;
 
-    // Small delay helper to avoid API bursts
-    const sleep = ms => new Promise(res => setTimeout(res, ms));
+    // Helpers
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const debounce = (fn, ms) => {
+        let timer;
+        return (...args) => {
+            clearTimeout(timer);
+            timer = setTimeout(() => fn(...args), ms);
+        };
+    };
 
-    async function processReplies() {
-        // 1) Grab all tweet articles (first is original, rest are replies)
+    // Ask background.js for an Ethos score
+    function fetchScore(username) {
+        return new Promise(res =>
+            chrome.runtime.sendMessage({ action: 'fetchEthos', username }, res)
+        ).then(resp =>
+            resp?.success && typeof resp.data.score === 'number'
+                ? resp.data.score
+                : 0
+        );
+    }
+
+    // Insert or update a badge next to the given handleSpan.
+    // Uses a larger style if it’s on a profile page.
+    async function injectBadge(handleSpan) {
+        if (processedSpans.has(handleSpan)) return;
+        processedSpans.add(handleSpan);
+
+        const raw = handleSpan.textContent.trim();
+        if (!raw.startsWith('@')) return;
+        const username = raw.slice(1);
+
+        const score = await fetchScore(username);
+        const isProfile = !!handleSpan.closest('div[data-testid="UserName"]');
+        const badgeClass = isProfile ? 'ethos-profile-badge' : 'ethos-badge';
+
+        // Find any existing badge of this class
+        let badge = handleSpan.nextElementSibling;
+        while (badge && !badge.classList.contains(badgeClass)) {
+            badge = badge.nextElementSibling;
+        }
+
+        if (badge) {
+            // update existing
+            badge.textContent = ` [${score}]`;
+        } else {
+            // create & style new badge
+            badge = document.createElement('span');
+            badge.className = badgeClass;
+            badge.textContent = ` [${score}]`;
+            badge.style.color = '#1DA1F2';
+
+            if (isProfile) {
+                badge.style.marginLeft = '6px';
+                badge.style.fontSize = '16px';
+                badge.style.fontWeight = 'bold';
+            } else {
+                badge.style.marginLeft = '4px';
+                badge.style.fontSize = '12px';
+            }
+
+            handleSpan.insertAdjacentElement('afterend', badge);
+        }
+    }
+
+    // Walk all tweets in the feed and inject badges
+    async function processArticles() {
         const articles = Array.from(document.querySelectorAll('article[role="article"]'));
-        if (articles.length < 2) return;
-        const replies = articles.slice(1);
+        for (const article of articles) {
+            if (processedArticles.has(article)) continue;
 
-        // 2) For any new reply, fetch its score and inject a badge
-        for (const article of replies) {
-            if (processedMap.has(article)) continue;
-
-            // Find the @username span
+            // Try the data-testid path first...
             let handleSpan = article.querySelector(
                 'div[data-testid="User-Name"] span:nth-child(2)'
             );
+            // ...otherwise fallback to any span starting with "@"
             if (!handleSpan) {
                 handleSpan = Array.from(article.querySelectorAll('span')).find(s =>
-                    /^@[A-Za-z0-9_]+$/.test(s.textContent.trim())
+                    /^\@[A-Za-z0-9_]+$/.test(s.textContent.trim())
                 );
             }
-            if (!handleSpan) {
-                console.warn('[EthosExt][cs] could not find handle span; skipping');
-                processedMap.set(article, 0);
-                continue;
+
+            if (handleSpan) {
+                await injectBadge(handleSpan);
             }
 
-            const username = handleSpan.textContent.trim().slice(1);
-            console.log('[EthosExt][cs] fetching Ethos score for', username);
-
-            // Ask background.js for the score
-            const response = await new Promise(res =>
-                chrome.runtime.sendMessage({ action: 'fetchEthos', username }, res)
-            );
-            console.log('[EthosExt][cs] response for', username, response);
-
-            const score = (response?.success && typeof response.data.score === 'number')
-                ? response.data.score
-                : 0;
-
-            // Inject a single badge
-            const nextEl = handleSpan.nextElementSibling;
-            let badge;
-            if (nextEl && nextEl.classList.contains('ethos-badge')) {
-                badge = nextEl;
-                badge.textContent = ` [${score}]`;
-            } else {
-                badge = document.createElement('span');
-                badge.className = 'ethos-badge';
-                badge.textContent = ` [${score}]`;
-                badge.style.marginLeft = '4px';
-                badge.style.fontSize = '12px';
-                badge.style.color = '#1DA1F2';
-                if (handleSpan.nextSibling) {
-                    handleSpan.parentNode.insertBefore(badge, handleSpan.nextSibling);
-                } else {
-                    handleSpan.parentNode.appendChild(badge);
-                }
-            }
-
-            // Store the score
-            processedMap.set(article, score);
-
-            // throttle before next
+            processedArticles.add(article);
             await sleep(100);
         }
-
-        // 3) Build an array of all replies with their stored scores
-        const scored = replies.map(article => ({
-            article,
-            score: processedMap.get(article) || 0
-        }));
-
-        console.log('[EthosExt][cs] scored array before sort:', scored);
-
-        // 4) Sort the array by descending score
-        const sorted = scored.slice().sort((a, b) => b.score - a.score);
-        console.log('[EthosExt][cs] scored array after sort:', sorted);
     }
 
-    // Observe for new replies loading (infinite scroll, nav)
-    const observer = new MutationObserver(processReplies);
+    // On a user profile page, inject a single, larger badge
+    async function processProfile() {
+        if (profileInjected) return;
+
+        const container = document.querySelector('div[data-testid="UserName"]');
+        if (!container) return;
+
+        const handleSpan = Array.from(container.querySelectorAll('span')).find(s =>
+            s.textContent.trim().startsWith('@')
+        );
+        if (!handleSpan) return;
+
+        await injectBadge(handleSpan);
+        profileInjected = true;
+    }
+
+    // Observe DOM mutations, but debounce to once per 300ms
+    const observer = new MutationObserver(
+        debounce(() => {
+            processArticles();
+            processProfile();
+        }, 300)
+    );
     observer.observe(document.body, { childList: true, subtree: true });
 
-    // Initial pass
-    processReplies();
+    // Initial invocation
+    processArticles();
+    processProfile();
 })();
