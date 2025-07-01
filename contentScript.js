@@ -1,8 +1,27 @@
 // contentScript.js
+
+const ETHOS_COLORS = {
+    untrusted: '#B72B38',
+    questionable: '#C29010',
+    neutral: '#C1C0B6',
+    reputable: '#2E7BC3',
+    exemplary: '#127F31',
+    revered: '#7A5EAF'
+};
+
+function getCategory(score) {
+    if (score <= 799) return 'untrusted';
+    if (score <= 1199) return 'questionable';
+    if (score <= 1599) return 'neutral';
+    if (score <= 1999) return 'reputable';
+    if (score <= 2399) return 'exemplary';
+    return 'revered';
+}
+
 (function () {
     console.log('[EthosExt][cs] contentScript loaded');
 
-    // 1) Inject global styles for our badges
+    // Inject global styles for our badges
     const style = document.createElement('style');
     style.textContent = `
       .ethos-badge {
@@ -12,7 +31,7 @@
         border-radius: 4px;
         padding: 2px 6px;
         font-size: 12px;
-        font-weight: 500;
+        font-weight: 700;      /* baseline weight */
         line-height: 1;
         margin-left: 4px;
       }
@@ -23,7 +42,7 @@
         border-radius: 6px;
         padding: 4px 10px;
         font-size: 16px;
-        font-weight: 600;
+        font-weight: 800;      /* baseline weight */
         line-height: 1;
         margin-left: 6px;
       }
@@ -68,20 +87,25 @@
         const isProfile = !!handleSpan.closest('div[data-testid="UserName"]');
         const cls = isProfile ? 'ethos-profile-badge' : 'ethos-badge';
 
-        // find existing badge of this class
+        // find or create badge
         let badge = handleSpan.nextElementSibling;
         while (badge && !badge.classList.contains(cls)) {
             badge = badge.nextElementSibling;
         }
-
-        if (badge) {
-            badge.textContent = score;
-        } else {
+        if (!badge) {
             badge = document.createElement('span');
             badge.className = cls;
-            badge.textContent = score;
             handleSpan.insertAdjacentElement('afterend', badge);
         }
+
+        // update content & color
+        badge.textContent = score;
+        const category = getCategory(score);
+        badge.style.color = ETHOS_COLORS[category];
+        badge.style.backgroundColor = 'transparent';
+
+        // force bolder font inline so it overrides page styles
+        badge.style.fontWeight = isProfile ? '800' : '700';
     }
 
     // Process timeline & replies
@@ -123,7 +147,7 @@
     }, 300));
     observer.observe(document.body, { childList: true, subtree: true });
 
-    // Run on load
+    // Initial run
     processArticles();
     processProfile();
 })();

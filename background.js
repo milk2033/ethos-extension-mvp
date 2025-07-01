@@ -1,4 +1,6 @@
 // background.js
+
+
 console.log('[EthosExt][bg] background.js loaded and running');
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
