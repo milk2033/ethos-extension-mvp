@@ -39,7 +39,18 @@ function getCategory(score) {
             ? resp.data.score
             : 0;
 
-        // sizing tweak: profile badges 14px, timeline badges 12px
+        // if score is zero, remove any existing badge and skip
+        const insertAfterEl = span.querySelector('a') || span;
+        if (score === 0) {
+            let oldBadge = insertAfterEl.nextElementSibling;
+            while (oldBadge && oldBadge.getAttribute('data-ethos-badge') !== 'true') {
+                oldBadge = oldBadge.nextElementSibling;
+            }
+            if (oldBadge) oldBadge.remove();
+            return;
+        }
+
+        // sizing tweak: profile badges 12px, timeline badges 12px
         const isProfile = !!span.closest('div[data-testid="UserName"],div[data-testid="User-Name"]');
         const fontSize = isProfile ? '12px' : '12px';
         const fontWeight = isProfile ? '800' : '700';
@@ -50,9 +61,6 @@ function getCategory(score) {
         const cat = getCategory(score);
         const bg = ETHOS_COLORS[cat];
         const fg = cat === 'neutral' ? '#1F2125' : '#FFFFFF';
-
-        // insertion point: <a> if present, else the span
-        const insertAfterEl = span.querySelector('a') || span;
 
         // find or create badge
         let badge = insertAfterEl.nextElementSibling;
