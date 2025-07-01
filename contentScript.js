@@ -19,135 +19,84 @@ function getCategory(score) {
 }
 
 (function () {
-    console.log('[EthosExt][cs] contentScript loaded');
+    console.log('[EthosExt][cs] loaded');
 
-    // Inject global styles for our badges
-    const style = document.createElement('style');
-    style.textContent = `
-      .ethos-badge {
-        display: inline-block;
-        background: #eaf5ff;
-        color: #0366d6;
-        border-radius: 4px;
-        padding: 2px 6px;
-        font-size: 12px;
-        font-weight: 700;      /* baseline weight */
-        line-height: 1;
-        margin-left: 4px;
-      }
-      .ethos-profile-badge {
-        display: inline-block;
-        background: #eaf5ff;
-        color: #0366d6;
-        border-radius: 6px;
-        padding: 4px 10px;
-        font-size: 16px;
-        font-weight: 800;      /* baseline weight */
-        line-height: 1;
-        margin-left: 6px;
-      }
-    `;
-    document.head.appendChild(style);
+    const seen = new WeakSet();
 
-    // Track what we've processed
-    const processedArticles = new WeakSet();
-    const processedSpans = new WeakSet();
-    let profileInjected = false;
+    async function injectBadge(span) {
+        if (seen.has(span)) return;
+        seen.add(span);
 
-    const sleep = ms => new Promise(r => setTimeout(r, ms));
-    const debounce = (fn, ms) => {
-        let t;
-        return (...args) => {
-            clearTimeout(t);
-            t = setTimeout(() => fn(...args), ms);
-        };
-    };
+        const txt = span.textContent.trim();
+        if (!txt.startsWith('@')) return;
+        const username = txt.slice(1);
 
-    // Fetch Ethos score
-    function fetchScore(username) {
-        return new Promise(res =>
+        // fetch score
+        const resp = await new Promise(res =>
             chrome.runtime.sendMessage({ action: 'fetchEthos', username }, res)
-        ).then(resp =>
-            resp?.success && typeof resp.data.score === 'number'
-                ? resp.data.score
-                : 0
         );
-    }
+        const score = (resp?.success && typeof resp.data.score === 'number')
+            ? resp.data.score
+            : 0;
 
-    // Insert or update a badge next to handleSpan
-    async function injectBadge(handleSpan) {
-        if (processedSpans.has(handleSpan)) return;
-        processedSpans.add(handleSpan);
+        // sizing tweak: profile badges 14px, timeline badges 12px
+        const isProfile = !!span.closest('div[data-testid="UserName"],div[data-testid="User-Name"]');
+        const fontSize = isProfile ? '12px' : '12px';
+        const fontWeight = isProfile ? '800' : '700';
+        const padding = isProfile ? '2px 6px' : '1px 4px';
+        const radius = isProfile ? '6px' : '4px';
 
-        const raw = handleSpan.textContent.trim();
-        if (!raw.startsWith('@')) return;
-        const username = raw.slice(1);
+        // pick colors
+        const cat = getCategory(score);
+        const bg = ETHOS_COLORS[cat];
+        const fg = cat === 'neutral' ? '#1F2125' : '#FFFFFF';
 
-        const score = await fetchScore(username);
-        const isProfile = !!handleSpan.closest('div[data-testid="UserName"]');
-        const cls = isProfile ? 'ethos-profile-badge' : 'ethos-badge';
+        // insertion point: <a> if present, else the span
+        const insertAfterEl = span.querySelector('a') || span;
 
         // find or create badge
-        let badge = handleSpan.nextElementSibling;
-        while (badge && !badge.classList.contains(cls)) {
+        let badge = insertAfterEl.nextElementSibling;
+        while (badge && badge.getAttribute('data-ethos-badge') !== 'true') {
             badge = badge.nextElementSibling;
         }
         if (!badge) {
             badge = document.createElement('span');
-            badge.className = cls;
-            handleSpan.insertAdjacentElement('afterend', badge);
+            badge.setAttribute('data-ethos-badge', 'true');
+            insertAfterEl.insertAdjacentElement('afterend', badge);
         }
 
-        // update content & color
+        // apply inline styles
+        Object.assign(badge.style, {
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            whiteSpace: 'nowrap',
+            backgroundColor: bg,
+            color: fg,
+            fontSize,
+            fontWeight,
+            padding,
+            borderRadius: radius,
+            marginLeft: '4px',
+            flex: '0 0 auto',
+            width: 'auto',
+            maxWidth: 'none'
+        });
+
         badge.textContent = score;
-        const category = getCategory(score);
-        badge.style.color = ETHOS_COLORS[category];
-        badge.style.backgroundColor = 'transparent';
-
-        // force bolder font inline so it overrides page styles
-        badge.style.fontWeight = isProfile ? '800' : '700';
     }
 
-    // Process timeline & replies
-    async function processArticles() {
-        const articles = Array.from(document.querySelectorAll('article[role="article"]'));
-        for (const art of articles) {
-            if (processedArticles.has(art)) continue;
-
-            let span = art.querySelector('div[data-testid="User-Name"] span:nth-child(2)');
-            if (!span) {
-                span = Array.from(art.querySelectorAll('span'))
-                    .find(s => /^\@[A-Za-z0-9_]+$/.test(s.textContent.trim()));
+    function scan() {
+        document.querySelectorAll('span').forEach(s => {
+            if (/^\@[A-Za-z0-9_]+$/.test(s.textContent.trim())) {
+                injectBadge(s);
             }
-            if (span) await injectBadge(span);
-
-            processedArticles.add(art);
-            await sleep(100);
-        }
+        });
     }
 
-    // Process user profile header
-    async function processProfile() {
-        if (profileInjected) return;
-        const container = document.querySelector('div[data-testid="UserName"]');
-        if (!container) return;
-
-        const span = Array.from(container.querySelectorAll('span'))
-            .find(s => s.textContent.trim().startsWith('@'));
-        if (!span) return;
-
-        await injectBadge(span);
-        profileInjected = true;
-    }
-
-    // Watch for new content
-    const observer = new MutationObserver(debounce(() => {
-        processArticles();
-        processProfile();
-    }, 300));
-    observer.observe(document.body, { childList: true, subtree: true });
-
-    // Initial run
-    processArticles();
-    processProfile();
+    scan();
+    new MutationObserver(scan).observe(document.body, {
+        childList: true,
+        subtree: true
+    });
 })();
