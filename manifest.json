@@ -1,6 +1,6 @@
 {
     "manifest_version": 2,
-    "name": "Ethos MVP Reputation Checker",
+    "name": "Ethos Reputation Checker",
     "version": "0.2.1",
     "description": "Displays Ethos scores next to @usernames on X.com",
     "icons": {
@@ -30,11 +30,11 @@
             "48": "icons/ethos_icon48.png",
             "128": "icons/ethos_icon128.png"
         },
-        "default_title": "Ethos MVP Reputation Checker"
+        "default_title": "Ethos Reputation Checker"
     },
     "browser_specific_settings": {
         "gecko": {
-            "id": "ethos-mvp@example.com",
+            "id": "ethos-reputation-checker-extension@example.com",
             "strict_min_version": "109.0"
         }
     }
